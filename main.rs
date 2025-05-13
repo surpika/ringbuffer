@@ -1,82 +1,76 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
 
 struct RingBuffer<const N: usize> {
-    buffer: Mutex<[i32; N]>,
-    write_index: Mutex<usize>,
-    read_index: Mutex<usize>,
-    is_empty: Mutex<bool>
+    // Use a single mutex to protect the entire state
+    state: Mutex<RingBufferState<N>>
+}
+
+struct RingBufferState<const N: usize> {
+    buffer: [i32; N],
+    write_index: usize,
+    read_index: usize,
+    is_empty: bool
 }
 
 impl<const N: usize> RingBuffer<N> {
     fn new() -> Self {
         RingBuffer {
-            buffer: Mutex::new([0; N]),  // Fixed: wrap with Mutex::new()
-            write_index: Mutex::new(0),
-            read_index: Mutex::new(0),
-            is_empty: Mutex::new(true)
-        }
-    }
-    
-    fn increment_read_index(&self) {
-        let mut read_idx = self.read_index.lock().unwrap();
-        if *read_idx == N - 1 {
-            *read_idx = 0;
-        } else {
-            *read_idx += 1;
-        }
-    }
-    
-    fn increment_write_index(&self) {
-        let mut write_idx = self.write_index.lock().unwrap();
-        if *write_idx == N - 1 {
-            *write_idx = 0;
-        } else {
-            *write_idx += 1;
+            state: Mutex::new(RingBufferState {
+                buffer: [0; N],
+                write_index: 0,
+                read_index: 0,
+                is_empty: true
+            })
         }
     }
     
     fn read(&self) -> Option<i32> {
-        let read_idx = *self.read_index.lock().unwrap();
-        let write_idx = *self.write_index.lock().unwrap();
-        let is_empty = *self.is_empty.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         
-        // If the read index and write index are equal, check if buffer is empty
-        if read_idx == write_idx && is_empty {
+        if state.read_index == state.write_index && state.is_empty {
             return None;
         }
         
-        // Read the value from the buffer
-        let value = self.buffer.lock().unwrap()[read_idx];
+        let value = state.buffer[state.read_index];
         
-        // Increment the read index
-        self.increment_read_index();
+        // Increment read index
+        if state.read_index == N - 1 {
+            state.read_index = 0;
+        } else {
+            state.read_index += 1;
+        }
         
         // Check if read caught up to write
-        let new_read_idx = *self.read_index.lock().unwrap();
-        if new_read_idx == write_idx {
-            *self.is_empty.lock().unwrap() = true;
+        if state.read_index == state.write_index {
+            state.is_empty = true;
         }
         
         Some(value)
     }
     
     fn write(&self, value: i32) {
-        let write_idx = *self.write_index.lock().unwrap();
-        let read_idx = *self.read_index.lock().unwrap();
-        let is_empty = *self.is_empty.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        let write_idx = state.write_index;
+        state.buffer[write_idx] = value;
         
-        // Write the value
-        self.buffer.lock().unwrap()[write_idx] = value;
-        
-        // If write index caught up to read index
-        if write_idx == read_idx && !is_empty {
-            self.increment_read_index();
+        if state.write_index == state.read_index && !state.is_empty {
+            // Increment read index - buffer is full
+            if state.read_index == N - 1 {
+                state.read_index = 0;
+            } else {
+                state.read_index += 1;
+            }
         }
         
-        self.increment_write_index();
-        *self.is_empty.lock().unwrap() = false;
+        // Increment write index
+        if state.write_index == N - 1 {
+            state.write_index = 0;
+        } else {
+            state.write_index += 1;
+        }
+        
+        state.is_empty = false;
     }
 }
 
@@ -92,7 +86,7 @@ fn main() {
                 let value = i + (id * 100); // Create unique values per producer
                 rb_clone.write(value);
                 println!("Producer {}: wrote {}", id, value);
-                thread::sleep(Duration::from_millis(50 + (id as u64) * 10));
+                //thread::sleep(Duration::from_millis(50 + (id as u64) * 10));
             }
         });
         producers.push(producer);
@@ -108,7 +102,7 @@ fn main() {
                     Some(value) => println!("Consumer {}: read {}", id, value),
                     None => println!("Consumer {}: buffer empty", id),
                 }
-                thread::sleep(Duration::from_millis(100 + (id as u64) * 20));
+                //thread::sleep(Duration::from_millis(100 + (id as u64) * 20));
             }
         });
         consumers.push(consumer);
