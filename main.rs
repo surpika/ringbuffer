@@ -81,32 +81,52 @@ impl<const N: usize> RingBuffer<N> {
 }
 
 fn main() {
-    // Create a RingBuffer shared between threads using Arc
-    let ring_buffer = Arc::new(RingBuffer::<10>::new());
+    let rb = Arc::new(RingBuffer::<5>::new());
     
-    // Clone Arc for the producer thread
-    let producer_rb = Arc::clone(&ring_buffer);
-    let producer = thread::spawn(move || {
-        for i in 1..=20 {
-            producer_rb.write(i);
-            println!("Produced: {}", i);
-            thread::sleep(Duration::from_millis(100)); // Slow down a bit for demonstration
-        }
-    });
-    
-    // Clone Arc for the consumer thread
-    let consumer_rb = Arc::clone(&ring_buffer);
-    let consumer = thread::spawn(move || {
-        for _ in 1..=20 {
-            match consumer_rb.read() {
-                Some(value) => println!("Consumed: {}", value),
-                None => println!("Buffer empty, waiting..."),
+    // Multiple producer threads
+    let mut producers = vec![];
+    for id in 0..3 {
+        let rb_clone = Arc::clone(&rb);
+        let producer = thread::spawn(move || {
+            for i in 1..=5 {
+                let value = i + (id * 100); // Create unique values per producer
+                rb_clone.write(value);
+                println!("Producer {}: wrote {}", id, value);
+                thread::sleep(Duration::from_millis(50 + (id as u64) * 10));
             }
-            thread::sleep(Duration::from_millis(150)); // Read slightly slower than write
-        }
-    });
+        });
+        producers.push(producer);
+    }
     
-    // Wait for both threads to complete
-    producer.join().unwrap();
-    consumer.join().unwrap();
+    // Multiple consumer threads
+    let mut consumers = vec![];
+    for id in 0..2 {
+        let rb_clone = Arc::clone(&rb);
+        let consumer = thread::spawn(move || {
+            for _ in 1..=8 {
+                match rb_clone.read() {
+                    Some(value) => println!("Consumer {}: read {}", id, value),
+                    None => println!("Consumer {}: buffer empty", id),
+                }
+                thread::sleep(Duration::from_millis(100 + (id as u64) * 20));
+            }
+        });
+        consumers.push(consumer);
+    }
+    
+    // Wait for all producers to finish
+    for producer in producers {
+        producer.join().unwrap();
+    }
+    
+    // Wait for all consumers to finish
+    for consumer in consumers {
+        consumer.join().unwrap();
+    }
+    
+    // Check final state
+    println!("\nFinal buffer state:");
+    while let Some(value) = rb.read() {
+        println!("Remaining: {}", value);
+    }
 }
